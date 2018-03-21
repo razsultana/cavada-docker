@@ -1,0 +1,86 @@
+FROM ubuntu:xenial
+MAINTAINER Razvan Sultana <razvan.sultana@gmail.com>
+
+ENV TERM xterm-256color
+ENV DEBIAN_FRONTEND noninteractive
+
+# Install basic packages
+RUN set -ex; \
+    apt-get update; \
+    apt-get install -y \
+        git \
+        ssh \
+        vim \
+        tree \
+        nmap \
+        htop \
+        wget \
+        bzip2 \
+        python-dev \
+        software-properties-common; \
+    apt-get clean
+
+# Add CRAN repository for R
+RUN set -ex; \
+    add-apt-repository 'deb http://cran.rstudio.com/bin/linux/ubuntu xenial/'; \
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E084DAB9
+
+# Install mysql, R and dependencies for shiny and cavada
+RUN set -ex; \
+    apt-get update; \
+    apt-get install -y \
+        mysql-server \
+        supervisor \
+        r-base \
+        r-cran-rmysql \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        gdebi-core \
+        texlive-latex-base \
+        texlive-latex-recommended \
+        texlive-latex-extra; \
+    apt-get clean
+
+# Install R packages necessary for shiny and cavada
+RUN set -ex; \
+    R -e "install.packages(c('knitr','rmarkdown','devtools','log4r'), repos='http://cran.rstudio.com/')"; \
+    R -e "devtools::install_version('shiny', version = '0.10.0', repos='http://cran.rstudio.com/')"; \
+    R -e "devtools::install_github('rstudio/shiny-incubator',ref='5a78877')"
+
+# Install shiny-server
+RUN set -ex; \
+    wget https://download3.rstudio.org/ubuntu-12.04/x86_64/shiny-server-1.4.2.786-amd64.deb; \
+    gdebi -n shiny-server-1.4.2.786-amd64.deb
+
+RUN mkdir -p /etc/supervisor/conf.d
+ADD ./supervisor-shinyserver.conf /etc/supervisor/conf.d/shinyserver.conf
+
+EXPOSE 3838
+
+# Install cavada code
+RUN set -ex; \
+    cd /srv/shiny-server; \
+    rm -rf cavada; \
+    git clone https://github.com/razsultana/cavada; \
+    cd cavada; \
+    git checkout v1.0; \
+    chown -R shiny.shiny /srv/shiny-server/cavada
+
+# Copy the MySQL config scripts
+ADD ./config_mysql.sh /config_mysql.sh
+ADD ./config_root_account.sh /config_root_account.sh
+ADD ./config_credentials.sh /config_credentials.sh
+RUN chmod 755 /*.sh
+
+ADD ./supervisor-mysql.conf /etc/supervisor/conf.d/mysql.conf
+
+# Allow external connections
+RUN sed -i 's/bind-address/#bind-address/g' /etc/mysql/mysql.conf.d/mysqld.cnf
+# Configure default DB
+RUN /config_mysql.sh
+
+EXPOSE 3306
+
+# Run supervisor which runs mysql and shiny-server
+CMD ["supervisord", "-n"]
+
